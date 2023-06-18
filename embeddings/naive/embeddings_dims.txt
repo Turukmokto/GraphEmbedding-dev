@@ -1,0 +1,36 @@
+alexnet:
+len = 20
+node_dim = 100
+
+resnet50:
+len = 175
+node_dim = 100
+
+resnet101:
+len = 345
+node_dim = 100
+
+unet:
+len = 68
+node_dim = 100
+
+vgg:
+len = 60
+node_dim = 100
+
+densenet:
+len = 714
+node_dim = 100
+
+inception:
+len = 322
+node_dim = 100
+
+mnasnet:
+len = 151
+node_dim = 100
+
+squeezenet:
+len = 65
+node_dim = 100
+

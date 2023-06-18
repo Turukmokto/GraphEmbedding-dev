@@ -1,0 +1,107 @@
+import torch
+import torch.utils.data
+from torch import nn
+from torch.nn import functional as F
+
+
+class SentenceVAE(nn.Module):
+    def __init__(self, vocab_size, sos_idx, eos_idx, training=False):
+        super(SentenceVAE, self).__init__()
+        if torch.cuda.is_available():
+            self.tensor = torch.cuda.FloatTensor
+        else:
+            self.tensor = torch.Tensor
+
+        self.training = training
+        self.max_sequence_length = 65
+
+        self.vocab_size = vocab_size
+        self.sos_idx = sos_idx
+        self.eos_idx = eos_idx
+
+        self.z_size = 30
+        self.h_size = 30
+        self.emb_size = 100
+
+        self.emb = nn.Embedding(self.vocab_size, self.emb_size)
+
+        self.word_dropout = nn.Dropout(p=0.5)
+
+        self.encoder_rnn = nn.GRU(self.emb_size, self.h_size, batch_first=True)
+        self.encode_fc1 = nn.Linear(self.h_size, self.z_size)
+        self.encode_fc2 = nn.Linear(self.h_size, self.z_size)
+
+        self.decode_fc1 = nn.Linear(self.z_size, self.h_size)
+        self.decoder_rnn = nn.GRU(self.emb_size, self.h_size, batch_first=True)
+        self.decode_fc2 = nn.Linear(self.h_size, self.vocab_size)
+
+    def encode(self, x):
+        x_emb = self.emb(x)
+        x_emb.detach()
+        _, h = self.encoder_rnn(x_emb)
+        h = h.view(h.size(1), h.size(2))
+        mu = self.encode_fc1(h)
+        logvar = self.encode_fc2(h)
+        return mu, logvar, x_emb
+
+    def reparameterize(self, mu, logvar):
+        if self.training:
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std)
+            return eps.mul(std).add_(mu)
+        else:
+            return mu
+
+    def decode(self, z, x_emb):
+        h = self.decode_fc1(z)
+        h = h.unsqueeze(0)
+        # x_emb = self.word_dropout(x_emb)
+        out, _ = self.decoder_rnn(x_emb, h)
+        logit = self.decode_fc2(out)
+        logit = F.log_softmax(logit, dim=-1)
+        return logit
+
+    def forward(self, x):
+        mu, logvar, x_emb = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        logp = self.decode(z, x_emb)
+        return logp, mu, logvar, z
+
+    def inference(self, z=None):
+        if z is None:
+            z = torch.randn([1, self.z_size])
+            if torch.cuda.is_available():
+                z = z.cuda()
+
+        h = self.decode_fc1(z)
+        h = h.unsqueeze(0)
+
+        output = self.tensor(self.max_sequence_length).long()
+        logp = self.tensor(self.max_sequence_length, self.vocab_size)
+
+        t = 0
+        x = torch.Tensor(1).fill_(self.sos_idx).long()
+
+        if torch.cuda.is_available():
+            x = x.cuda()
+
+        while t < self.max_sequence_length:
+            x = x.unsqueeze(1)
+            input_emb = self.emb(x)
+            out, h = self.decoder_rnn(input_emb, h)
+            logits = self.decode_fc2(out)
+            logits = F.log_softmax(logits, dim=-1)
+            x = torch.argmax(torch.exp(logits), dim=-1)
+            x = x[0]
+            if x[0] == self.eos_idx:
+                logp[t] = logits[0][0]
+                output[t] = x[0]
+                logp = logp[:(t + 1)]
+                output = output[:(t + 1)]
+                break
+            else:
+                logp[t] = logits[0][0]
+                output[t] = x[0]
+            t += 1
+
+        return output, logp.unsqueeze(0), z
